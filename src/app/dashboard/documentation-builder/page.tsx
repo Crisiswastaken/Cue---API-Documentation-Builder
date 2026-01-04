@@ -122,53 +122,59 @@ export default function DocumentationBuilderPage() {
       </div>
 
       {/* File Upload Section */}
-      <Card className="mb-8">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileJson className="h-5 w-5" />
-            Upload OpenAPI Specification
-          </CardTitle>
-          <CardDescription>
-            Upload a standard OpenAPI 3.x JSON file to begin
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <label
-                htmlFor="file-upload"
-                className="flex items-center justify-center w-full h-32 px-4 transition bg-white border-2 border-dashed rounded-lg appearance-none cursor-pointer hover:border-gray-400 focus:outline-none border-gray-300"
-              >
-                <div className="flex flex-col items-center space-y-2">
-                  <Upload className="w-8 h-8 text-gray-400" />
-                  <span className="text-sm text-gray-600">
-                    {fileName || 'Click to upload OpenAPI JSON file'}
-                  </span>
-                </div>
-                <input
-                  id="file-upload"
-                  type="file"
-                  accept=".json"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </label>
-            </div>
-            {endpoints.length > 0 && (
-              <div className="flex flex-col gap-2">
-                <Button variant="outline" onClick={handleReset}>
-                  Reset
-                </Button>
-              </div>
-            )}
+<Card className="mb-8">
+  <CardHeader>
+    <CardTitle className="flex items-center gap-2">
+      <FileJson className="h-5 w-5" />
+      Upload OpenAPI Specification
+    </CardTitle>
+    <CardDescription>
+      Upload a standard OpenAPI 3.x JSON file to begin
+    </CardDescription>
+  </CardHeader>
+
+  <CardContent>
+    {/* Upload area */}
+    <div className="flex items-center gap-4">
+      <div className="flex-1">
+        <label
+          htmlFor="file-upload"
+          className="flex items-center justify-center w-full h-32 px-4 transition bg-white border-2 border-dashed rounded-lg appearance-none cursor-pointer hover:border-gray-400 focus:outline-none border-gray-300"
+        >
+          <div className="flex flex-col items-center space-y-2">
+            <Upload className="w-8 h-8 text-gray-400" />
+            <span className="text-sm text-gray-600">
+              {fileName || 'Click to upload OpenAPI JSON file'}
+            </span>
           </div>
-          {isLoading && (
-            <div className="mt-4 text-center text-sm text-muted-foreground">
-              Processing file...
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          <input
+            id="file-upload"
+            type="file"
+            accept=".json"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+        </label>
+      </div>
+    </div>
+
+    {/* Reset button BELOW */}
+    {endpoints.length > 0 && (
+      <div className="mt-4 flex justify-end">
+        <Button variant="outline" onClick={handleReset}>
+          Reset
+        </Button>
+      </div>
+    )}
+
+    {isLoading && (
+      <div className="mt-4 text-center text-sm text-muted-foreground">
+        Processing file...
+      </div>
+    )}
+  </CardContent>
+</Card>
+
 
       {/* Error Display */}
       {error && (
@@ -183,8 +189,8 @@ export default function DocumentationBuilderPage() {
       {endpoints.length > 0 && (
         <>
           {/* Generate Button */}
-          <div className="mb-6 flex items-center justify-between sticky top-0 z-10 bg-background/95 backdrop-blur py-4">
-            <div>
+          <div className="mb-6 flex items-center justify-between top-0  bg-background/95 backdrop-blur py-4">
+            <div className=''>
               <h2 className="text-2xl font-bold">Endpoints ({endpoints.length})</h2>
               <p className="text-sm text-muted-foreground">
                 Edit any field below and select endpoints to include in documentation
