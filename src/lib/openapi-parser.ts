@@ -262,3 +262,27 @@ export async function readOpenAPIFile(file: File): Promise<OpenAPISpec> {
     reader.readAsText(file);
   });
 }
+
+/**
+ * Parse JSON string directly (for copy-paste functionality)
+ */
+export function parseJSONString(jsonString: string): OpenAPISpec {
+  if (!jsonString.trim()) {
+    throw new Error('JSON input is empty');
+  }
+
+  try {
+    const data = JSON.parse(jsonString);
+
+    if (!validateOpenAPISpec(data)) {
+      throw new Error('Invalid OpenAPI specification. Must be OpenAPI 3.x with paths.');
+    }
+
+    return data;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error('Invalid JSON format: ' + error.message);
+    }
+    throw error;
+  }
+}
