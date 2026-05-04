@@ -17,7 +17,13 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Cue | API Documentation Builder",
-  description: "Import OpenAPI/Swagger specs, curate endpoints, and generate polished markdown documentation.",
+  description:
+    "Import OpenAPI/Swagger specs, curate endpoints, and generate polished markdown documentation.",
+  icons: {
+    icon: "/Logo.png",          // default favicon
+    shortcut: "/Logo.png",      // legacy support
+    apple: "/Logo.png",         // iOS home screen
+  },
 };
 
 interface RootLayoutProps {
