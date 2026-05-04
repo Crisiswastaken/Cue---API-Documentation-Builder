@@ -27,9 +27,7 @@ import {
 type InputMode = 'upload' | 'paste' | 'url';
 
 const FOOTER_LINKS = {
-  docs: 'https://docs.cue.dev',
-  github: 'https://github.com/your-org/cue',
-  support: 'mailto:support@cue.dev',
+  github: 'https://github.com/Crisiswastaken/Cue---API-Documentation-Builder',
 };
 
 const SPEC_PREVIEW_LIMIT = 380;
