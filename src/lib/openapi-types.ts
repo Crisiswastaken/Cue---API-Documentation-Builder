@@ -1,8 +1,14 @@
 /**
  * TypeScript types for parsed OpenAPI endpoint data
  * These types represent the normalized, frontend-safe structure
- * extracted from an OpenAPI 3.x JSON file
+ * extracted from OpenAPI/Swagger specification inputs
  */
+
+export type SpecFormat =
+  | 'openapi-json'
+  | 'openapi-yaml'
+  | 'swagger-json'
+  | 'swagger-yaml';
 
 export interface Parameter {
   name: string;
@@ -109,4 +115,53 @@ export interface OpenAPISpec {
     url: string;
     description?: string;
   }>;
+}
+
+export interface SwaggerSpec {
+  swagger: string;
+  info?: {
+    title?: string;
+    version?: string;
+    description?: string;
+  };
+  schemes?: string[];
+  host?: string;
+  basePath?: string;
+  paths: {
+    [path: string]: {
+      [method: string]: {
+        summary?: string;
+        description?: string;
+        operationId?: string;
+        tags?: string[];
+        parameters?: Array<{
+          name?: string;
+          in?: 'path' | 'query' | 'header' | 'cookie' | 'body' | 'formData';
+          required?: boolean;
+          description?: string;
+          type?: string;
+          schema?: unknown;
+        }>;
+        responses?: {
+          [statusCode: string]: {
+            description?: string;
+            schema?: unknown;
+            examples?: Record<string, unknown>;
+          };
+        };
+        security?: Array<{
+          [key: string]: string[];
+        }>;
+      };
+    };
+  };
+  definitions?: Record<string, unknown>;
+  securityDefinitions?: {
+    [key: string]: {
+      type: string;
+      name?: string;
+      in?: string;
+      description?: string;
+    };
+  };
 }

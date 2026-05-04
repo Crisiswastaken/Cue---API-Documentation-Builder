@@ -1,312 +1,456 @@
 'use client';
 
-/**
- * Documentation Builder Page
- * Main page for converting OpenAPI JSON to editable documentation
- * Supports file upload, direct JSON paste, editing, selection, and markdown export
- */
-
-import React, { useState, useCallback } from 'react';
-import { Button } from '@/components/ui/button';
+import React, { useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { AlertCircle, FileJson, Download, Upload, ClipboardPaste } from 'lucide-react';
-import { readOpenAPIFile, parseOpenAPISpec, parseJSONString } from '@/lib/openapi-parser';
-import { EditableEndpoint } from '@/lib/openapi-types';
-import { generateMarkdownDocumentation, downloadMarkdown } from '@/lib/markdown-generator';
-import { EndpointCard } from '@/components/endpoint-card';
+import { EndpointDetailModal } from '@/components/endpoint-detail-modal';
 import { EndpointSelector } from '@/components/endpoint-selector';
 import { ModeToggle } from '@/components/mode-toggle';
+import { SelectedEndpointsSidebar } from '@/components/selected-endpoints-sidebar';
+import { createEndpointGroups, getEndpointGroupKey } from '@/lib/endpoint-grouping';
+import { downloadMarkdown, generateMarkdownDocumentation } from '@/lib/markdown-generator';
+import { EditableEndpoint } from '@/lib/openapi-types';
+import { fetchSpecFromDocumentationUrl, parseSpecString, readSpecFile } from '@/lib/openapi-parser';
+import {
+  AlertCircle,
+  ClipboardPaste,
+  FileJson,
+  Link2,
+  RefreshCcw,
+  Upload,
+} from 'lucide-react';
 
-type InputMode = 'upload' | 'paste';
+type InputMode = 'upload' | 'paste' | 'url';
+
+const FOOTER_LINKS = {
+  docs: 'https://docs.cue.dev',
+  github: 'https://github.com/your-org/cue',
+  support: 'mailto:support@cue.dev',
+};
+
+const SPEC_PREVIEW_LIMIT = 380;
+
+function getCollapsedPreview(content: string, limit = SPEC_PREVIEW_LIMIT): string {
+  const trimmed = content.trim();
+  if (trimmed.length <= limit) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, limit)}...`;
+}
 
 export default function DocumentationBuilderPage() {
   const [endpoints, setEndpoints] = useState<EditableEndpoint[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [fileName, setFileName] = useState<string>('');
+  const [sourceLabel, setSourceLabel] = useState('');
+  const [sourceFormat, setSourceFormat] = useState('');
   const [inputMode, setInputMode] = useState<InputMode>('upload');
-  const [jsonInput, setJsonInput] = useState<string>('');
+  const [specInput, setSpecInput] = useState('');
+  const [docsUrlInput, setDocsUrlInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
+  const [openedEndpointId, setOpenedEndpointId] = useState<string | null>(null);
+  const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
+  const [isSpecPreviewExpanded, setIsSpecPreviewExpanded] = useState(false);
 
-  const processOpenAPISpec = useCallback((spec: ReturnType<typeof parseJSONString>) => {
-    // Parse endpoints
-    const parsedEndpoints = parseOpenAPISpec(spec);
+  const selectedEndpoints = useMemo(
+    () => endpoints.filter((endpoint) => endpoint.selected),
+    [endpoints]
+  );
 
-    // Convert to editable endpoints (all selected by default)
-    const editableEndpoints: EditableEndpoint[] = parsedEndpoints.map((endpoint) => ({
-      ...endpoint,
-      selected: true,
-    }));
+  const endpointGroups = useMemo(
+    () => createEndpointGroups(endpoints, searchQuery),
+    [endpoints, searchQuery]
+  );
 
-    setEndpoints(editableEndpoints);
+  const openedEndpoint = useMemo(
+    () => endpoints.find((endpoint) => endpoint.id === openedEndpointId) ?? null,
+    [endpoints, openedEndpointId]
+  );
 
-    if (editableEndpoints.length === 0) {
-      setError('No endpoints found in the OpenAPI specification');
-    }
-  }, []);
+  const showSpecPreview = specInput.trim().length > SPEC_PREVIEW_LIMIT && !isSpecPreviewExpanded;
 
-  const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const applyParsedEndpoints = useCallback(
+    (
+      parsedEndpoints: EditableEndpoint[] | Omit<EditableEndpoint, 'selected'>[],
+      sourceName: string,
+      format: string
+    ) => {
+      const editableEndpoints: EditableEndpoint[] = parsedEndpoints.map((endpoint) => ({
+        ...endpoint,
+        selected: false,
+      }));
 
-    // Validate file type
-    if (!file.name.endsWith('.json')) {
-      setError('Please upload a valid .json file');
-      return;
-    }
+      setEndpoints(editableEndpoints);
+      setSourceLabel(sourceName);
+      setSourceFormat(format);
+      setSearchQuery('');
+      setActiveEndpointId(null);
+      setOpenedEndpointId(null);
+      setIsEndpointModalOpen(false);
 
-    setIsLoading(true);
-    setError(null);
-    setFileName(file.name);
+      if (editableEndpoints.length === 0) {
+        setError('No endpoints found in the provided specification.');
+      }
+    },
+    []
+  );
 
-    try {
-      const spec = await readOpenAPIFile(file);
-      processOpenAPISpec(spec);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to process file');
-      setEndpoints([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [processOpenAPISpec]);
+  const handleFileUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+
+      if (!/\.(json|ya?ml)$/i.test(file.name)) {
+        setError('Please upload a supported specification file (.json, .yaml, .yml).');
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const parsed = await readSpecFile(file);
+        applyParsedEndpoints(parsed.endpoints, file.name, parsed.format);
+      } catch (uploadError) {
+        setError(uploadError instanceof Error ? uploadError.message : 'Failed to process file');
+        setEndpoints([]);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [applyParsedEndpoints]
+  );
 
   const handlePasteSubmit = useCallback(() => {
-    if (!jsonInput.trim()) {
-      setError('Please paste JSON content');
+    if (!specInput.trim()) {
+      setError('Please paste your specification content first.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    setFileName('pasted-spec.json');
 
     try {
-      const spec = parseJSONString(jsonInput);
-      processOpenAPISpec(spec);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to parse JSON');
+      const parsed = parseSpecString(specInput, 'pasted-spec');
+      applyParsedEndpoints(parsed.endpoints, 'Pasted specification', parsed.format);
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : 'Failed to parse specification');
       setEndpoints([]);
     } finally {
       setIsLoading(false);
     }
-  }, [jsonInput, processOpenAPISpec]);
+  }, [applyParsedEndpoints, specInput]);
+
+  const handleUrlSubmit = useCallback(async () => {
+    if (!docsUrlInput.trim()) {
+      setError('Please enter a documentation URL first.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const parsed = await fetchSpecFromDocumentationUrl(docsUrlInput.trim());
+      applyParsedEndpoints(parsed.endpoints, parsed.specUrl, parsed.format);
+    } catch (urlError) {
+      setError(urlError instanceof Error ? urlError.message : 'Failed to import from URL');
+      setEndpoints([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [applyParsedEndpoints, docsUrlInput]);
 
   const handleEndpointUpdate = useCallback((updatedEndpoint: EditableEndpoint) => {
-    setEndpoints((prev) =>
-      prev.map((ep) => (ep.id === updatedEndpoint.id ? updatedEndpoint : ep))
+    setEndpoints((previous) =>
+      previous.map((endpoint) => (endpoint.id === updatedEndpoint.id ? updatedEndpoint : endpoint))
     );
   }, []);
 
   const handleToggleEndpoint = useCallback((endpointId: string) => {
-    setEndpoints((prev) =>
-      prev.map((ep) => (ep.id === endpointId ? { ...ep, selected: !ep.selected } : ep))
+    setEndpoints((previous) =>
+      previous.map((endpoint) =>
+        endpoint.id === endpointId ? { ...endpoint, selected: !endpoint.selected } : endpoint
+      )
+    );
+  }, []);
+
+  const handleToggleGroup = useCallback((groupKey: string, shouldSelect: boolean) => {
+    setEndpoints((previous) =>
+      previous.map((endpoint) =>
+        getEndpointGroupKey(endpoint) === groupKey
+          ? { ...endpoint, selected: shouldSelect }
+          : endpoint
+      )
     );
   }, []);
 
   const handleSelectAll = useCallback(() => {
-    setEndpoints((prev) => prev.map((ep) => ({ ...ep, selected: true })));
+    setEndpoints((previous) => previous.map((endpoint) => ({ ...endpoint, selected: true })));
   }, []);
 
   const handleDeselectAll = useCallback(() => {
-    setEndpoints((prev) => prev.map((ep) => ({ ...ep, selected: false })));
+    setEndpoints((previous) => previous.map((endpoint) => ({ ...endpoint, selected: false })));
+  }, []);
+
+  const handleOpenEndpointDetails = useCallback((endpointId: string) => {
+    setActiveEndpointId(endpointId);
+    setOpenedEndpointId(endpointId);
+    setIsEndpointModalOpen(true);
   }, []);
 
   const handleGenerateDocumentation = useCallback(() => {
-    const selectedCount = endpoints.filter((e) => e.selected).length;
-
-    if (selectedCount === 0) {
-      setError('Please select at least one endpoint to generate documentation');
+    if (selectedEndpoints.length === 0) {
+      setError('Please select at least one endpoint to generate documentation.');
       return;
     }
 
-    const markdown = generateMarkdownDocumentation(endpoints, 'API Documentation');
-    downloadMarkdown(markdown, 'api-documentation.md');
+    const markdown = generateMarkdownDocumentation(endpoints, 'Cue API Documentation');
+    downloadMarkdown(markdown, 'cue-api-documentation.md');
 
     if (error?.includes('select at least one')) {
       setError(null);
     }
-  }, [endpoints, error]);
+  }, [endpoints, error, selectedEndpoints.length]);
 
   const handleReset = useCallback(() => {
     setEndpoints([]);
     setError(null);
-    setFileName('');
-    setJsonInput('');
-    const fileInput = document.getElementById('file-upload') as HTMLInputElement;
+    setSourceLabel('');
+    setSourceFormat('');
+    setSpecInput('');
+    setDocsUrlInput('');
+    setSearchQuery('');
+    setActiveEndpointId(null);
+    setOpenedEndpointId(null);
+    setIsEndpointModalOpen(false);
+    setIsSpecPreviewExpanded(false);
+
+    const fileInput = document.getElementById('file-upload') as HTMLInputElement | null;
     if (fileInput) {
       fileInput.value = '';
     }
   }, []);
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Documentation Builder</h1>
-            <p className="text-sm text-muted-foreground">
-              Convert OpenAPI 3.x JSON to editable API documentation
-            </p>
-          </div>
-          <ModeToggle />
-        </div>
-      </header>
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="fixed top-4 right-4 z-40">
+        <ModeToggle />
+      </div>
 
-      <main className="max-w-7xl mx-auto w-full p-4">
-        {/* Input Section */}
-        <Card className="mb-8">
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 px-4 pb-10 pt-20">
+        <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileJson className="h-5 w-5" />
-              OpenAPI Specification Input
+            <CardTitle className="flex items-center gap-2 text-2xl">
+              <FileJson className="h-6 w-6" />
+              Cue Documentation Builder
             </CardTitle>
             <CardDescription>
-              Upload a JSON file or paste OpenAPI 3.x specification directly
+              Import OpenAPI/Swagger specs from file upload, direct paste, or documentation URL.
+              Supported formats: OpenAPI JSON, OpenAPI YAML, Swagger JSON, and Swagger YAML.
             </CardDescription>
           </CardHeader>
-
           <CardContent>
-            {/* Mode Toggle Tabs */}
-            <div className="flex gap-2 mb-4">
+            <div className="mb-4 grid gap-2 sm:grid-cols-3">
               <Button
                 variant={inputMode === 'upload' ? 'default' : 'outline'}
                 onClick={() => setInputMode('upload')}
-                className="gap-2"
+                className="justify-start gap-2"
               >
                 <Upload className="h-4 w-4" />
-                Upload File
+                Upload Spec File
               </Button>
               <Button
                 variant={inputMode === 'paste' ? 'default' : 'outline'}
                 onClick={() => setInputMode('paste')}
-                className="gap-2"
+                className="justify-start gap-2"
               >
                 <ClipboardPaste className="h-4 w-4" />
-                Paste JSON
+                Paste Spec Content
+              </Button>
+              <Button
+                variant={inputMode === 'url' ? 'default' : 'outline'}
+                onClick={() => setInputMode('url')}
+                className="justify-start gap-2"
+              >
+                <Link2 className="h-4 w-4" />
+                Import From Docs URL
               </Button>
             </div>
 
-            {/* Upload Mode */}
             {inputMode === 'upload' && (
-              <div className="flex items-center gap-4">
-                <div className="flex-1">
-                  <label
-                    htmlFor="file-upload"
-                    className="flex items-center justify-center w-full h-32 px-4 transition border-2 border-dashed rounded-lg appearance-none cursor-pointer hover:border-primary/50 focus:outline-none border-muted-foreground/25 bg-muted/50"
-                  >
-                    <div className="flex flex-col items-center space-y-2">
-                      <Upload className="w-8 h-8 text-muted-foreground" />
-                      <span className="text-sm text-muted-foreground">
-                        {fileName || 'Click to upload OpenAPI JSON file'}
-                      </span>
+              <label
+                htmlFor="file-upload"
+                className="flex h-36 w-full cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/30 bg-muted/30 px-4 text-center transition hover:border-primary/60"
+              >
+                <Upload className="mb-2 h-8 w-8 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">
+                  {sourceLabel || 'Click to upload .json, .yaml, or .yml specification file'}
+                </span>
+                <input
+                  id="file-upload"
+                  type="file"
+                  accept=".json,.yaml,.yml"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            )}
+
+            {inputMode === 'paste' && (
+              <div className="space-y-3">
+                {showSpecPreview ? (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border bg-muted/20 p-3">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Specification Preview
+                      </p>
+                      <pre className="max-h-40 overflow-hidden whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
+                        {getCollapsedPreview(specInput)}
+                      </pre>
                     </div>
-                    <input
-                      id="file-upload"
-                      type="file"
-                      accept=".json"
-                      onChange={handleFileUpload}
-                      className="hidden"
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={() => setIsSpecPreviewExpanded(true)}>
+                        View Full Content
+                      </Button>
+                      <Button onClick={handlePasteSubmit} disabled={!specInput.trim() || isLoading}>
+                        Parse Specification
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Textarea
+                      placeholder="Paste OpenAPI or Swagger specification (JSON or YAML) here..."
+                      value={specInput}
+                      onChange={(event) => setSpecInput(event.target.value)}
+                      onPaste={() => setIsSpecPreviewExpanded(false)}
+                      className="min-h-56 font-mono text-sm"
                     />
-                  </label>
-                </div>
+                    <div className="flex flex-wrap gap-2">
+                      {specInput.trim().length > SPEC_PREVIEW_LIMIT && (
+                        <Button variant="outline" onClick={() => setIsSpecPreviewExpanded(false)}>
+                          Collapse Preview
+                        </Button>
+                      )}
+                      <Button onClick={handlePasteSubmit} disabled={!specInput.trim() || isLoading}>
+                        Parse Specification
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
-            {/* Paste Mode */}
-            {inputMode === 'paste' && (
-              <div className="space-y-4">
-                <Textarea
-                  placeholder="Paste your OpenAPI 3.x JSON specification here..."
-                  value={jsonInput}
-                  onChange={(e) => setJsonInput(e.target.value)}
-                  className="min-h-50 font-mono text-sm"
+            {inputMode === 'url' && (
+              <div className="space-y-3">
+                <Input
+                  placeholder="https://yourwebsite.com/service/docs"
+                  value={docsUrlInput}
+                  onChange={(event) => setDocsUrlInput(event.target.value)}
                 />
-                <Button onClick={handlePasteSubmit} disabled={!jsonInput.trim() || isLoading}>
-                  Parse JSON
+                <p className="text-xs text-muted-foreground">
+                  Cue will derive nearby spec paths like openapi.json/openapi.yaml/swagger.json/swagger.yaml and import the first valid one.
+                </p>
+                <Button onClick={handleUrlSubmit} disabled={!docsUrlInput.trim() || isLoading}>
+                  Import Documentation
                 </Button>
               </div>
             )}
 
-            {/* Reset button */}
             {endpoints.length > 0 && (
-              <div className="mt-4 flex justify-end">
-                <Button variant="outline" onClick={handleReset}>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Loaded from: <span className="font-medium text-foreground">{sourceLabel}</span>
+                  {sourceFormat ? (
+                    <span className="ml-2 rounded-md bg-muted px-2 py-1 text-xs uppercase">{sourceFormat}</span>
+                  ) : null}
+                </p>
+                <Button variant="outline" onClick={handleReset} className="gap-2">
+                  <RefreshCcw className="h-4 w-4" />
                   Reset
                 </Button>
               </div>
             )}
 
-            {isLoading && (
-              <div className="mt-4 text-center text-sm text-muted-foreground">
-                Processing...
-              </div>
-            )}
+            {isLoading && <p className="mt-4 text-sm text-muted-foreground">Processing specification...</p>}
           </CardContent>
         </Card>
 
-        {/* Error Display */}
         {error && (
-          <Alert variant="destructive" className="mb-8">
+          <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
+            <AlertTitle>Import Error</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
-        {/* Endpoints Display */}
         {endpoints.length > 0 && (
-          <>
-            {/* Generate Button */}
-            <div className="mb-6 flex items-center justify-between sticky top-18 bg-background/95 backdrop-blur py-4 z-5">
-              <div>
-                <h2 className="text-2xl font-bold">Endpoints ({endpoints.length})</h2>
-                <p className="text-sm text-muted-foreground">
-                  Edit any field below and select endpoints to include in documentation
-                </p>
-              </div>
-              <Button onClick={handleGenerateDocumentation} size="lg" className="gap-2">
-                <Download className="h-4 w-4" />
-                Generate Documentation
-              </Button>
+          <div className="flex min-h-[calc(100vh-6rem)] gap-6">
+            <div className="min-w-0 flex-1">
+              <EndpointSelector
+                groups={endpointGroups}
+                totalCount={endpoints.length}
+                selectedCount={selectedEndpoints.length}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                onToggleEndpoint={handleToggleEndpoint}
+                onToggleGroup={handleToggleGroup}
+                onSelectAll={handleSelectAll}
+                onDeselectAll={handleDeselectAll}
+                onActivateEndpoint={handleOpenEndpointDetails}
+                activeEndpointId={activeEndpointId}
+              />
             </div>
 
-            {/* Endpoint Cards */}
-            <div className="mb-8">
-              {endpoints.map((endpoint) => (
-                <EndpointCard
-                  key={endpoint.id}
-                  endpoint={endpoint}
-                  onUpdate={handleEndpointUpdate}
-                />
-              ))}
-            </div>
-
-            {/* Endpoint Selector Panel */}
-            <EndpointSelector
-              endpoints={endpoints}
+            <SelectedEndpointsSidebar
+              totalEndpoints={endpoints.length}
+              selectedEndpoints={selectedEndpoints}
+              activeEndpointId={activeEndpointId}
+              onActivateEndpoint={handleOpenEndpointDetails}
               onToggleEndpoint={handleToggleEndpoint}
-              onSelectAll={handleSelectAll}
-              onDeselectAll={handleDeselectAll}
+              onGenerateDocumentation={handleGenerateDocumentation}
             />
-          </>
+          </div>
         )}
 
-        {/* Empty State */}
         {endpoints.length === 0 && !error && !isLoading && (
           <Card className="border-dashed">
-            <CardContent className="flex flex-col items-center justify-center py-16">
-              <FileJson className="h-16 w-16 text-muted-foreground mb-4" />
-              <h3 className="text-xl font-semibold mb-2">No API specification loaded</h3>
-              <p className="text-muted-foreground text-center max-w-md">
-                Upload an OpenAPI 3.x JSON file or paste the specification directly to get started.
-                The file will be parsed and displayed as editable documentation cards.
+            <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+              <FileJson className="mb-4 h-16 w-16 text-muted-foreground" />
+              <h3 className="mb-2 text-xl font-semibold">No API specification loaded</h3>
+              <p className="max-w-lg text-muted-foreground">
+                Start by uploading a specification file, pasting JSON/YAML content, or providing a documentation URL.
               </p>
             </CardContent>
           </Card>
         )}
       </main>
+
+      <EndpointDetailModal
+        endpoint={openedEndpoint}
+        open={isEndpointModalOpen}
+        onOpenChange={setIsEndpointModalOpen}
+        onUpdate={handleEndpointUpdate}
+      />
+
+      <footer className="border-t bg-muted/20">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <p>Cue. Documentation Builder</p>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href={FOOTER_LINKS.github} target="_blank" rel="noreferrer" className="hover:text-foreground">
+              GitHub
+            </Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

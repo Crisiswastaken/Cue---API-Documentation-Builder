@@ -1,26 +1,27 @@
 'use client';
 
-/**
- * EndpointSelector Component
- * Compact selection panel showing all endpoints with checkboxes
- * Syncs with individual endpoint cards
- * Can be minimized to avoid blocking content
- */
-
-import React, { useState } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { EditableEndpoint } from '@/lib/openapi-types';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Search } from 'lucide-react';
+import { EndpointGroup } from '@/lib/endpoint-grouping';
 
 interface EndpointSelectorProps {
-  endpoints: EditableEndpoint[];
+  groups: EndpointGroup[];
+  totalCount: number;
+  selectedCount: number;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
   onToggleEndpoint: (endpointId: string) => void;
+  onToggleGroup: (groupKey: string, shouldSelect: boolean) => void;
   onSelectAll: () => void;
   onDeselectAll: () => void;
+  onActivateEndpoint: (endpointId: string) => void;
+  activeEndpointId: string | null;
 }
 
 const METHOD_COLORS: Record<string, string> = {
@@ -30,90 +31,116 @@ const METHOD_COLORS: Record<string, string> = {
   PATCH: 'bg-orange-500',
   DELETE: 'bg-red-500',
   OPTIONS: 'bg-gray-500',
-  HEAD: 'bg-purple-500',
+  HEAD: 'bg-violet-500',
 };
 
 export function EndpointSelector({
-  endpoints,
+  groups,
+  totalCount,
+  selectedCount,
+  searchQuery,
+  onSearchQueryChange,
   onToggleEndpoint,
+  onToggleGroup,
   onSelectAll,
   onDeselectAll,
+  onActivateEndpoint,
+  activeEndpointId,
 }: EndpointSelectorProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const selectedCount = endpoints.filter((e) => e.selected).length;
-  const totalCount = endpoints.length;
-
   return (
-    <Card className="sticky bottom-4 shadow-lg border-2 z-50">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">
-            Endpoint Selection ({selectedCount}/{totalCount})
-          </CardTitle>
-          <div className="flex gap-2">
-            {!isCollapsed && (
-              <>
-                <Button variant="outline" size="sm" onClick={onSelectAll}>
-                  Select All
-                </Button>
-                <Button variant="outline" size="sm" onClick={onDeselectAll}>
-                  Deselect All
-                </Button>
-              </>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsCollapsed(!isCollapsed)}
-              className="ml-2"
-            >
-              {isCollapsed ? (
-                <>
-                  <ChevronUp className="h-4 w-4 mr-1" />
-                  Expand
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-4 w-4 mr-1" />
-                  Minimize
-                </>
-              )}
+    <Card className="sticky top-20 z-20 mb-6 max-h-[calc(100vh-6rem)] overflow-hidden border-2">
+      <CardHeader className=" space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="text-lg">Endpoint Catalog ({selectedCount}/{totalCount} selected)</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={onSelectAll}>
+              Select All
+            </Button>
+            <Button variant="outline" size="sm" onClick={onDeselectAll}>
+              Deselect All
             </Button>
           </div>
         </div>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            placeholder="Search by path, method, summary, or tag"
+            className="pl-9"
+          />
+        </div>
       </CardHeader>
-      {!isCollapsed && (
-        <CardContent>
-          <div className="max-h-64 overflow-y-auto space-y-2">
-            {endpoints.map((endpoint) => (
-              <div
-                key={endpoint.id}
-                className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <Checkbox
-                  id={`selector-${endpoint.id}`}
-                  checked={endpoint.selected}
-                  onCheckedChange={() => onToggleEndpoint(endpoint.id)}
-                />
-                <Label
-                  htmlFor={`selector-${endpoint.id}`}
-                  className="flex-1 flex items-center gap-2 cursor-pointer"
-                >
-                  <Badge className={`${METHOD_COLORS[endpoint.method]} text-white text-xs`}>
-                    {endpoint.method}
-                  </Badge>
-                  <code className="text-sm font-mono">{endpoint.path}</code>
-                  {endpoint.summary && (
-                    <span className="text-sm text-muted-foreground truncate">
-                      - {endpoint.summary}
-                    </span>
-                  )}
-                </Label>
-              </div>
-            ))}
+
+      <CardContent className="overflow-y-auto endpoint-modal-scroll">
+        {groups.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No endpoints match the current search query.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {groups.map((group) => {
+              const allSelected = group.endpoints.length > 0 && group.selectedCount === group.endpoints.length;
+
+              return (
+                <section key={group.key} className="  rounded-lg border bg-muted/20 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id={`group-${group.key}`}
+                        checked={allSelected}
+                        onCheckedChange={(checked) => onToggleGroup(group.key, checked === true)}
+                      />
+                      <Label htmlFor={`group-${group.key}`} className="cursor-pointer font-semibold">
+                        {group.label} ({group.selectedCount}/{group.endpoints.length})
+                      </Label>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onToggleGroup(group.key, !allSelected)}
+                    >
+                      {allSelected ? 'Clear Group' : 'Select Group'}
+                    </Button>
+                  </div>
+
+                  <div className="endpoint-modal-scroll max-h-60 space-y-2 overflow-y-auto pr-1">
+                    {group.endpoints.map((endpoint) => (
+                      <div
+                        key={endpoint.id}
+                        className={`rounded-md border p-2 transition ${
+                          endpoint.id === activeEndpointId ? 'border-primary bg-primary/5' : 'hover:bg-background'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id={`selector-${endpoint.id}`}
+                            checked={endpoint.selected}
+                            onCheckedChange={() => onToggleEndpoint(endpoint.id)}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => onActivateEndpoint(endpoint.id)}
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          >
+                            <Badge className={`${METHOD_COLORS[endpoint.method] ?? 'bg-zinc-500'} text-white text-xs`}>
+                              {endpoint.method}
+                            </Badge>
+                            <span className="truncate font-mono text-sm">{endpoint.path}</span>
+                          </button>
+                        </div>
+                        {endpoint.summary && (
+                          <p className="mt-1 line-clamp-1 pl-7 text-xs text-muted-foreground">{endpoint.summary}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
           </div>
-        </CardContent>
-      )}
+        )}
+      </CardContent>
     </Card>
   );
 }

@@ -1,33 +1,33 @@
 /**
  * OpenAPI Schema Resolver
- * Resolves $ref pointers and generates example JSON from schemas
+ * Resolves $ref pointers and generates example JSON from schemas.
  */
 
 import { OpenAPISpec } from './openapi-types';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 /**
- * Resolves a $ref pointer to its actual schema
- * @param ref - Reference string like "#/components/schemas/AssetListOut"
- * @param spec - Full OpenAPI specification
- * @returns Resolved schema object or null if not found
+ * Resolves a $ref pointer to its actual schema.
  */
 function resolveRef(ref: string, spec: OpenAPISpec): unknown {
-  // Parse the $ref path (e.g., "#/components/schemas/AssetListOut")
   const parts = ref.replace('#/', '').split('/');
-  
-  let current: any = spec;
+
+  let current: unknown = spec;
   for (const part of parts) {
-    if (!current || typeof current !== 'object') {
+    if (!isRecord(current)) {
       return null;
     }
     current = current[part];
   }
-  
+
   return current;
 }
 
 /**
- * Generates an example value for a given type
+ * Generates an example value for a given primitive type.
  */
 function getExampleForType(type: string, format?: string): unknown {
   switch (type) {
@@ -52,112 +52,107 @@ function getExampleForType(type: string, format?: string): unknown {
 }
 
 /**
- * Recursively resolves a schema to an example JSON object
- * Handles $ref, allOf, anyOf, oneOf, arrays, objects
- * @param schema - Schema object to resolve
- * @param spec - Full OpenAPI specification
- * @param visited - Set of visited refs to prevent circular references
- * @param depth - Current recursion depth (max 10)
+ * Recursively resolves a schema to an example JSON value.
  */
 export function resolveSchema(
-  schema: any,
+  schema: unknown,
   spec: OpenAPISpec,
   visited = new Set<string>(),
   depth = 0
 ): unknown {
-  // Prevent infinite recursion
   if (depth > 10) {
     return '...';
   }
 
-  if (!schema || typeof schema !== 'object') {
+  if (!isRecord(schema)) {
     return schema;
   }
 
-  // Handle $ref
-  if (schema.$ref) {
-    const ref = schema.$ref as string;
-    
-    // Prevent circular references
+  if (typeof schema.$ref === 'string') {
+    const ref = schema.$ref;
+
     if (visited.has(ref)) {
       return { $ref: ref };
     }
-    
+
     visited.add(ref);
     const resolved = resolveRef(ref, spec);
-    
+
     if (!resolved) {
-      visited.delete(ref); // Clean up on failure
+      visited.delete(ref);
       return { $ref: ref };
     }
-    
+
     const result = resolveSchema(resolved, spec, visited, depth + 1);
-    visited.delete(ref); // Remove from visited after processing this branch
+    visited.delete(ref);
     return result;
   }
 
-  // Handle allOf (merge all schemas)
-  if (schema.allOf && Array.isArray(schema.allOf)) {
-    const merged: any = {};
+  if (Array.isArray(schema.allOf)) {
+    const merged: Record<string, unknown> = {};
     for (const subSchema of schema.allOf) {
       const resolved = resolveSchema(subSchema, spec, visited, depth + 1);
-      Object.assign(merged, resolved);
+      if (isRecord(resolved)) {
+        Object.assign(merged, resolved);
+      }
     }
     return merged;
   }
 
-  // Handle anyOf/oneOf (take first non-null option and resolve it)
-  if (schema.anyOf && Array.isArray(schema.anyOf)) {
-    // Find first non-null option
-    const firstNonNull = schema.anyOf.find((s: any) => s.type !== 'null');
-    if (firstNonNull) {
+  if (Array.isArray(schema.anyOf)) {
+    const firstNonNull = schema.anyOf.find((candidate) => {
+      return !(isRecord(candidate) && candidate.type === 'null');
+    });
+
+    if (firstNonNull !== undefined) {
       return resolveSchema(firstNonNull, spec, visited, depth + 1);
     }
+
     return resolveSchema(schema.anyOf[0], spec, visited, depth + 1);
   }
-  if (schema.oneOf && Array.isArray(schema.oneOf)) {
-    // Find first non-null option
-    const firstNonNull = schema.oneOf.find((s: any) => s.type !== 'null');
-    if (firstNonNull) {
+
+  if (Array.isArray(schema.oneOf)) {
+    const firstNonNull = schema.oneOf.find((candidate) => {
+      return !(isRecord(candidate) && candidate.type === 'null');
+    });
+
+    if (firstNonNull !== undefined) {
       return resolveSchema(firstNonNull, spec, visited, depth + 1);
     }
+
     return resolveSchema(schema.oneOf[0], spec, visited, depth + 1);
   }
 
-  // Handle arrays
-  if (schema.type === 'array' && schema.items) {
-    const itemExample = resolveSchema(schema.items, spec, visited, depth + 1);
-    return [itemExample];
+  if (schema.type === 'array' && schema.items !== undefined) {
+    return [resolveSchema(schema.items, spec, visited, depth + 1)];
   }
 
-  // Handle objects
-  if (schema.type === 'object' || schema.properties) {
-    const result: any = {};
-    
-    if (schema.properties) {
+  if (schema.type === 'object' || isRecord(schema.properties)) {
+    const result: Record<string, unknown> = {};
+
+    if (isRecord(schema.properties)) {
       for (const [key, value] of Object.entries(schema.properties)) {
         result[key] = resolveSchema(value, spec, visited, depth + 1);
       }
     }
-    
+
     return result;
   }
 
-  // Handle primitive types
-  if (schema.type) {
-    // Check for example or default first
+  if (typeof schema.type === 'string') {
     if (schema.example !== undefined) {
       return schema.example;
     }
+
     if (schema.default !== undefined) {
       return schema.default;
     }
-    
-    return getExampleForType(schema.type, schema.format);
+
+    const format = typeof schema.format === 'string' ? schema.format : undefined;
+    return getExampleForType(schema.type, format);
   }
 
-  // If no type specified, check for enum
-  if (schema.enum && Array.isArray(schema.enum) && schema.enum.length > 0) {
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
     return schema.enum[0];
   }
 
@@ -165,12 +160,9 @@ export function resolveSchema(
 }
 
 /**
- * Resolve and format a schema to pretty JSON string
- * @param schema - Schema object (may contain $ref)
- * @param spec - Full OpenAPI specification
- * @returns Formatted JSON string
+ * Resolve and format a schema to pretty JSON string.
  */
-export function resolveSchemaToJSON(schema: any, spec: OpenAPISpec): string {
+export function resolveSchemaToJSON(schema: unknown, spec: OpenAPISpec): string {
   if (!schema) {
     return '';
   }
